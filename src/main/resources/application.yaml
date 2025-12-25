@@ -3,10 +3,9 @@ spring:
     name: course-management
   h2:
     console:
-      enabled: true
-      path: /h2-console
+      enabled: false
       settings:
-        web-allow-others: true
+        web-allow-others: false
   datasource:
     url: jdbc:h2:mem:courseapp;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     username: sa
@@ -16,14 +15,21 @@ spring:
     hibernate:
       ddl-auto: update
     defer-datasource-initialization: true
+
 management:
   endpoints:
     web:
       exposure:
-        include: "*"
+        include: "health,info"
+
 server:
   error:
-    include-stacktrace: ALWAYS
+    include-stacktrace: never
+  servlet:
+    session:
+      cookie:
+        same-site: strict
+
 app:
   plugin:
     url:
