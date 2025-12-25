@@ -5,7 +5,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
-import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,12 +17,14 @@ import org.springframework.web.client.RestTemplate;
 import ru.mtuci.coursemanagement.model.Course;
 import ru.mtuci.coursemanagement.repository.CourseRepository;
 import ru.mtuci.coursemanagement.service.CourseService;
-
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.RestClientException;
+import java.net.URI;
 import java.util.List;
 
 @Slf4j
 @Controller
-@CrossOrigin(origins = "*")
+
 @RequiredArgsConstructor
 public class CourseController {
     private final CourseRepository repo;
@@ -75,10 +76,34 @@ public class CourseController {
 
     @GetMapping("/api/courses/import")
     @ResponseBody
-    public String importFromUrl(@RequestParam String url) {
-        RestTemplate rt = new RestTemplate();
-        String json = rt.getForObject(url, String.class);
-        log.info("Импортированы данные курсов (raw): {}", json);
-        return "OK";
+    public ResponseEntity<String> importFromUrl(@RequestParam String url) {
+        try {
+            URI uri = URI.create(url);
+            String scheme = uri.getScheme();
+            if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid URL scheme");
+            }
+            if (uri.getHost() == null || uri.getHost().isBlank()) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid URL host");
+            }
+
+            RestTemplate rt = new RestTemplate();
+            rt.getForObject(uri, String.class);
+
+            log.info("Импортированы данные курсов из внешнего источника");
+            return ResponseEntity.ok("OK");
+
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid URL");
+
+        } catch (RestClientException e) {
+            log.warn("Import failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("Upstream request failed");
+
+        } catch (Exception e) {
+            log.error("Unexpected import error: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Internal error");
+        }
     }
+
 }
