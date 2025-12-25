@@ -10,7 +10,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.xml.sax.InputSource;
 
 import java.io.StringReader;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 public class XmlController {
 

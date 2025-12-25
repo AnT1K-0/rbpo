@@ -20,7 +20,6 @@ import ru.mtuci.coursemanagement.service.CourseService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClientException;
 import java.net.URI;
-
 import java.util.List;
 
 @Slf4j
@@ -75,8 +74,6 @@ public class CourseController {
         return service.searchByTitle(title);
     }
 
-    @GetMapping("/api/courses/import")
-    @ResponseBody
     @GetMapping("/api/courses/import")
     @ResponseBody
     public ResponseEntity<String> importFromUrl(@RequestParam String url) {
