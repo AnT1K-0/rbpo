@@ -76,8 +76,8 @@ public class CourseController {
     @ResponseBody
     public String importFromUrl(@RequestParam String url) {
         RestTemplate rt = new RestTemplate();
-        String json = rt.getForObject(url, String.class);
-        log.info("Импортированы данные курсов (raw): {}", json);
+        rt.getForObject(url, String.class);
+        log.info("Импортированы данные курсов из внешнего источника");
         return "OK";
     }
 }
