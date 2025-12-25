@@ -61,6 +61,12 @@ public class AuthController {
     public String register(@RequestParam String username,
                            @RequestParam String password,
                            @RequestParam(required = false, defaultValue = "STUDENT") String role) {
+
+        // A06:2025 Insecure Design — whitelist ролей
+        if (!"STUDENT".equals(role) && !"TEACHER".equals(role)) {
+            role = "STUDENT";
+        }
+
         String hashedPassword = passwordEncoder.encode(password);
         users.save(new User(null, username, hashedPassword, role));
 
