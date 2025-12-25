@@ -19,7 +19,6 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(new HttpSessionCsrfTokenRepository())
-                        .ignoringRequestMatchers("/api/**")
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
@@ -57,16 +56,21 @@ public class SecurityConfig {
 
                 .headers(headers -> headers
                         .contentSecurityPolicy(csp -> csp
-                                .policyDirectives("default-src 'self'")
+                                .policyDirectives("default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'")
                         )
                         .frameOptions(frame -> frame.deny())
                         .httpStrictTransportSecurity(hsts -> hsts
                                 .maxAgeInSeconds(31536000)
+                                .includeSubDomains(true)
                         )
                         .referrerPolicy(referrer -> referrer
                                 .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN)
                         )
-                        .contentTypeOptions(contentType -> {})
+                        .contentTypeOptions(contentType -> {
+                        })
+                        .permissionsPolicy(pp -> pp
+                                .policy("geolocation=(), microphone=(), camera=()")
+                        )
                 );
 
         return http.build();
