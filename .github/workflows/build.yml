@@ -1,0 +1,271 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  secrets-scan:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: secrets-scan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build application
+        run: mvn clean package
+
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar-artifact
+          path: target/*.jar
+
+  sast:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pipx install semgrep
+
+      - name: Run Semgrep
+        run: semgrep scan --config auto --sarif --output semgrep.sarif || true
+
+      - name: Upload SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep.sarif
+
+  sca:
+    runs-on: ubuntu-latest
+    needs: build
+    container:
+      image: maven:3.9.11-eclipse-temurin-21-alpine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run OWASP
+        run: mvn -B org.owasp:dependency-check-maven:check -Dnvd.api.key=${{ secrets.NVD_API_KEY }}
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report.html
+
+  dast-dynamic:
+    name: DAST Scan
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      security-events: write
+      actions: write
+      checks: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jar-artifact
+          path: target
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Start Application (wait for health)
+        run: |
+          JAR="$(ls -1 target/*.jar | head -n 1)"
+          echo "Using JAR: $JAR"
+          nohup java -jar "$JAR" > app.log 2>&1 &
+
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
+              echo "App is UP"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "App did not become healthy in time"
+          tail -n 200 app.log || true
+          exit 1
+
+      - name: Fix permissions
+        run: chmod -R 777 .
+
+      - name: Create Empty Rules File
+        run: touch zap_rules.tsv && chmod 666 zap_rules.tsv
+
+      - name: Pull ZAP Image
+        run: docker pull ghcr.io/zaproxy/zaproxy:stable
+
+      - name: ZAP Baseline Scan
+        run: |
+          docker run --rm --network host --user root \
+            -v $(pwd):/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:8080 -r zap-baseline-report.html -I || true
+
+      - name: Upload Baseline Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-baseline-report
+          path: zap-baseline-report.html
+
+      - name: ZAP API Scan
+        run: |
+          docker run --rm --network host --user root \
+            -v $(pwd):/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-api-scan.py -t http://localhost:8080/v3/api-docs -f openapi -r zap-api-report.html -I || true
+
+      - name: Upload API Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-api-report
+          path: zap-api-report.html
+
+  fuzz-web:
+    name: Fuzzing (ffuf)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jar-artifact
+          path: target
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Start Application (wait for health)
+        run: |
+          JAR="$(ls -1 target/*.jar | head -n 1)"
+          echo "Using JAR: $JAR"
+          nohup java -jar "$JAR" > app.log 2>&1 &
+
+          for i in {1..60}; do
+            if curl -fsS http://localhost:8080/actuator/health >/dev/null 2>&1; then
+              echo "App is UP"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "App did not become healthy in time"
+          tail -n 200 app.log || true
+          exit 1
+
+      - name: Install ffuf (fixed PATH)
+        run: |
+          go install github.com/ffuf/ffuf/v2@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          ffuf -V
+
+      - name: Prepare wordlists
+        run: |
+          cat > fuzz_paths.txt <<'EOF'
+          actuator
+          actuator/health
+          swagger-ui
+          swagger-ui/index.html
+          v3/api-docs
+          api
+          api-docs
+          login
+          admin
+          EOF
+
+          cat > fuzz_payloads.txt <<'EOF'
+          '
+          "
+          <script>alert(1)</script>
+          ../../../../etc/passwd
+          %27%20OR%201%3D1--
+          {{7*7}}
+          ..%2f..%2f..%2f
+          EOF
+
+      - name: Fuzz endpoints (path fuzz)
+        run: |
+          ffuf -w fuzz_paths.txt \
+            -u http://localhost:8080/FUZZ \
+            -fc 404 \
+            -of json -o ffuf-paths.json || true
+
+      - name: Fuzz query parameter (input fuzz)
+        run: |
+          ffuf -w fuzz_payloads.txt \
+            -u "http://localhost:8080/v3/api-docs?group=FUZZ" \
+            -of json -o ffuf-param.json || true
+
+      - name: Fail on 5xx (server errors)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+          if jq -e '.results[] | select(.status >= 500)' ffuf-paths.json >/dev/null 2>&1; then
+            echo "Fuzzing found 5xx responses in path fuzzing"
+            exit 1
+          fi
+
+          if jq -e '.results[] | select(.status >= 500)' ffuf-param.json >/dev/null 2>&1; then
+            echo "Fuzzing found 5xx responses in parameter fuzzing"
+            exit 1
+          fi
+
+          echo "No 5xx detected."
+
+      - name: Upload fuzzing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzzing-ffuf-report
+          path: |
+            ffuf-paths.json
+            ffuf-param.json
+            fuzz_paths.txt
+            fuzz_payloads.txt
+            app.log
