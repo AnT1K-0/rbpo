@@ -22,6 +22,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -150,3 +151,100 @@ jobs:
         with:
           name: zap-api-report
           path: zap-api-report.html
+
+  fuzz-web:
+    name: Fuzzing (ffuf)
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jar-artifact
+          path: target
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Start Application
+        run: |
+          nohup java -jar target/*.jar &
+          sleep 30
+
+      - name: Install ffuf
+        run: |
+          go install github.com/ffuf/ffuf/v2@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+          ffuf -V
+
+      - name: Prepare wordlists
+        run: |
+          cat > fuzz_paths.txt <<'EOF'
+          actuator
+          actuator/health
+          swagger-ui
+          swagger-ui/index.html
+          v3/api-docs
+          api
+          api-docs
+          login
+          admin
+          EOF
+
+          cat > fuzz_payloads.txt <<'EOF'
+          '
+          "
+          <script>alert(1)</script>
+          ../../../../etc/passwd
+          %27%20OR%201%3D1--
+          {{7*7}}
+          ..%2f..%2f..%2f
+          EOF
+
+      - name: Fuzz endpoints (path fuzz)
+        run: |
+          ffuf -w fuzz_paths.txt \
+            -u http://localhost:8080/FUZZ \
+            -fc 404 \
+            -of json -o ffuf-paths.json || true
+
+      - name: Fuzz query parameter (input fuzz)
+        run: |
+          ffuf -w fuzz_payloads.txt \
+            -u "http://localhost:8080/v3/api-docs?group=FUZZ" \
+            -of json -o ffuf-param.json || true
+
+      - name: Fail on 5xx (server errors)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+          if jq -e '.results[] | select(.status >= 500)' ffuf-paths.json >/dev/null 2>&1; then
+            echo "Fuzzing found 5xx responses in path fuzzing"
+            exit 1
+          fi
+
+          if jq -e '.results[] | select(.status >= 500)' ffuf-param.json >/dev/null 2>&1; then
+            echo "Fuzzing found 5xx responses in parameter fuzzing"
+            exit 1
+          fi
+
+          echo "No 5xx detected."
+
+      - name: Upload fuzzing reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzzing-ffuf-report
+          path: |
+            ffuf-paths.json
+            ffuf-param.json
+            fuzz_paths.txt
+            fuzz_payloads.txt
