@@ -15,6 +15,8 @@
 <hr/>
 <h4>Добавить курс</h4>
 <form method="post" action="/courses">
+    <input type="hidden" th:name="${_csrf.parameterName}" th:value="${_csrf.token}"/>
+
     <input name="title" placeholder="Название"/>
     <input name="description" placeholder="Описание"/>
     <input name="teacherId" placeholder="teacherId"/>

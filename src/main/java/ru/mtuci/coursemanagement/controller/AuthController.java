@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,14 +12,19 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import ru.mtuci.coursemanagement.model.User;
 import ru.mtuci.coursemanagement.service.UserService;
-
+import ru.mtuci.coursemanagement.service.LoginAttemptService;
 import java.util.Optional;
+import lombok.extern.slf4j.Slf4j;
+
 
 @Slf4j
 @Controller
 @RequiredArgsConstructor
 public class AuthController {
     private final UserService users;
+    private final LoginAttemptService loginAttempts;
+
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     @GetMapping("/login")
     public String loginPage() {
@@ -30,17 +36,30 @@ public class AuthController {
                           @RequestParam String password,
                           HttpServletRequest req,
                           Model model) {
+
+        String key = username + "|" + req.getRemoteAddr();
+
+        if (loginAttempts.isBlocked(key)) {
+            model.addAttribute("error", "Слишком много попыток. Попробуйте позже.");
+            return "login";
+        }
+
         Optional<User> opt = users.findByUsername(username);
         if (opt.isPresent()) {
             User u = opt.get();
-            if (u.getPassword().equals(password)) {
-                log.info("User {} logged in with password {}", username, password);
+            if (passwordEncoder.matches(password, u.getPassword())) {
+                loginAttempts.onSuccess(key);
+
+                log.info("User {} logged in successfully", username);
+
                 HttpSession s = req.getSession(true);
                 s.setAttribute("username", username);
                 s.setAttribute("role", u.getRole());
                 return "redirect:/";
             }
         }
+
+        loginAttempts.onFailure(key);
         model.addAttribute("error", "Неверные учетные данные");
         return "login";
     }
@@ -56,7 +75,14 @@ public class AuthController {
     public String register(@RequestParam String username,
                            @RequestParam String password,
                            @RequestParam(required = false, defaultValue = "STUDENT") String role) {
-        users.save(new User(null, username, password, role));
+
+        if (!"STUDENT".equals(role) && !"TEACHER".equals(role)) {
+            role = "STUDENT";
+        }
+
+        String hashedPassword = passwordEncoder.encode(password);
+        users.save(new User(null, username, hashedPassword, role));
+
         return "redirect:/login";
     }
 }
